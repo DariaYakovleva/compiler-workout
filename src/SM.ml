@@ -26,20 +26,20 @@ type config = int list * Syntax.Stmt.config
    Takes a configuration and a program, and returns a configuration as a result
  *)                         
 let rec eval (stack, (state, instream, outstream)) program = match program with
-	| [] -> (stack, (state, instream, outstream))
-	| firstinsn :: nextinsns -> match firstinsn with
+    | [] -> (stack, (state, instream, outstream))
+    | firstinsn :: nextinsns -> match firstinsn with
         | CONST c -> eval (c :: stack, (state, instream, outstream)) nextinsns
         | READ -> eval (hd instream :: stack, (state, tl instream, outstream)) nextinsns
-		| WRITE -> eval (tl stack, (state, instream, hd stack :: outstream)) nextinsns
-		| LD variable -> eval (state variable :: stack, (state, instream, outstream)) nextinsns
-		| ST variable -> eval (tl stack, (Expr.update variable (hd stack) state, instream, outstream)) nextinsns
-		| BINOP binoper -> 
-             let a :: b :: tlstack = stack in
+        | WRITE -> eval (tl stack, (state, instream, outstream @ [hd stack])) nextinsns
+        | LD variable -> eval (state variable :: stack, (state, instream, outstream)) nextinsns
+        | ST variable -> eval (tl stack, (Expr.update variable (hd stack) state, instream, outstream)) nextinsns
+        | BINOP binoper -> 
+             let b :: a :: tlstack = stack in
              let res = Expr.eval state (Expr.Binop (binoper, Expr.Const a, Expr.Const b)) in
              eval (res :: tlstack, (state, instream, outstream)) nextinsns
 
 (* Expression compiler
-	val compileExpression : Expr.t -> prg
+    val compileExpression : Expr.t -> prg
 
    Takes a expression and return program for the stack machine
 *)

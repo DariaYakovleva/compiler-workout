@@ -11,7 +11,7 @@ module Expr =
     (* The type for expressions. Note, in regular OCaml there is no "@type..." 
        notation, it came from GT. 
     *)
-	@type t =
+    @type t =
     (* integer constant *) | Const of int
     (* variable         *) | Var   of string
     (* binary operator  *) | Binop of string * t * t with show
@@ -42,10 +42,10 @@ module Expr =
        Takes a state and an expression, and returns the value of the expression in 
        the given state.
     *)
-	let cast_to_int value = if value then 1 else 0;;
-	let cast_to_bool value = value <> 0;;
+    let cast_to_int value = if value then 1 else 0;;
+    let cast_to_bool value = value <> 0;;
 
-	let rec eval state expression = match expression with
+    let rec eval state expression = match expression with
         | Const value -> value
         | Var name -> state name
         | Binop (operation, first, second) ->
@@ -91,7 +91,7 @@ module Stmt =
     *)
     let rec eval (state, instream, outstream) statement = match statement with
       | Read v -> (Expr.update v (hd instream) state, tl instream, outstream)
-      | Write expression -> (state, instream, (Expr.eval state expression) :: outstream)
+      | Write expression -> (state, instream, outstream @ [Expr.eval state expression])
       | Assign (variable, expression) -> (Expr.update variable (Expr.eval state expression) state, instream, outstream)
       | Seq (state1, state2) -> eval (eval (state, instream, outstream) state1) state2
       | _ -> failwith "Incorrect statement"                                                     
