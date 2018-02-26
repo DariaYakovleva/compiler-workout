@@ -46,12 +46,12 @@ module Expr =
 	let cast_to_bool value = value <> 0;;
 
 	let rec eval state expression = match expression with
-	    | Const value -> value
-   	 	| Var name -> state name
-   	 	| Binop (operation, first, second) ->
-        	let a = eval state first in
-        	let b = eval state second in
-	    	match operation with
+        | Const value -> value
+        | Var name -> state name
+        | Binop (operation, first, second) ->
+            let a = eval state first in
+            let b = eval state second in
+            match operation with
                  | "+" -> a + b
                  | "-" -> a - b
                  | "*" -> a * b
@@ -90,10 +90,10 @@ module Stmt =
        Takes a configuration and a statement, and returns another configuration
     *)
     let rec eval (state, instream, outstream) statement = match statement with
-		| Read variable -> (Expr.update variable (hd instream), tl instream, outstream)
-		| Write expression -> (state, instream, outstream :: (Expr.eval state expression))
-		| Assign (variable, expression) -> (Expr.update variable (Expr.eval state expression) state, instream, outstream)
-		| Seq (state1, state2) -> eval (eval (state, instream, outstream) state1) state2
-		| _ -> failwith "Incorrect statement"
+      | Read v -> (Expr.update v (hd instream) state, tl instream, outstream)
+      | Write expression -> (state, instream, (Expr.eval state expression) :: outstream)
+      | Assign (variable, expression) -> (Expr.update variable (Expr.eval state expression) state, instream, outstream)
+      | Seq (state1, state2) -> eval (eval (state, instream, outstream) state1) state2
+      | _ -> failwith "Incorrect statement"                                                     
                                                          
   end
