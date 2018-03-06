@@ -2,10 +2,11 @@
    The library provides "@type ..." syntax extension and plugins like show, etc.
 *)
 open GT
+open List
 
 (* Opening a library for combinator-based syntax analysis *)
 open Ostap.Combinators
-       
+    
 (* Simple expressions: syntax and semantics *)
 module Expr =
   struct
@@ -44,7 +45,30 @@ module Expr =
        Takes a state and an expression, and returns the value of the expression in 
        the given state.
     *)
-    let eval _ = failwith "Not implemented yet"
+    let cast_to_int value = if value then 1 else 0;;
+    let cast_to_bool value = value <> 0;;
+
+    let rec eval state expression = match expression with
+        | Const value -> value
+        | Var name -> state name
+        | Binop (operation, first, second) ->
+            let a = eval state first in
+            let b = eval state second in
+            match operation with
+                 | "+" -> a + b
+                 | "-" -> a - b
+                 | "*" -> a * b
+                 | "/" -> a / b
+                 | "%" -> a mod b
+                 | "!!" -> cast_to_int (cast_to_bool a || cast_to_bool b)
+                 | "&&" -> cast_to_int (cast_to_bool a && cast_to_bool b)
+                 | "==" -> cast_to_int (a == b)
+                 | "!=" -> cast_to_int (a != b)
+                 | "<=" -> cast_to_int (a <= b)
+                 | "<" -> cast_to_int (a < b)
+                 | ">=" -> cast_to_int (a >= b)
+                 | ">" -> cast_to_int (a > b)
+                 | _ -> failwith (Printf.sprintf "Undefined operation %s" operation) 
 
     (* Expression parser. You can use the following terminals:
 
@@ -78,13 +102,18 @@ module Stmt =
 
        Takes a configuration and a statement, and returns another configuration
     *)
-    let eval _ = failwith "Not implemented yet"
-
+    let rec eval (state, instream, outstream) statement = match statement with
+      | Read v -> (Expr.update v (hd instream) state, tl instream, outstream)
+      | Write expression -> (state, instream, outstream @ [Expr.eval state expression])
+      | Assign (variable, expression) -> (Expr.update variable (Expr.eval state expression) state, instream, outstream)
+      | Seq (state1, state2) -> eval (eval (state, instream, outstream) state1) state2
+      | _ -> failwith "Incorrect statement"                                                     
+                                                         
     (* Statement parser *)
     ostap (
       parse: empty {failwith "Not implemented yet"}
     )
-      
+
   end
 
 (* The top-level definitions *)
