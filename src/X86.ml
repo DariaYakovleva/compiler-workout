@@ -82,9 +82,9 @@ let conditionRegister op = match op with
     | "!=" -> "ne"
 
 let compareOp op x y res = [
-    Mov (x, ebx);
+    Mov (y, edx);
     Binop("^", eax, eax);
-    Binop("cmp", ebx, y);
+    Binop("cmp", x, edx);
     Set(op, "%al");
     Mov(eax, res);
 ]
