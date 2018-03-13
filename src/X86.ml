@@ -153,7 +153,7 @@ let compileStep env instr = match instr with
                     | "/" -> env, divOp x y res
                     | "%" -> env, modOp x y res
                     | "+" | "-" | "*" -> env, binOp operation x y res
-                    | "&&" | "||" -> env, andOrOp operation x y res
+                    | "&&" | "!!" -> env, andOrOp operation x y res
                     | _ -> failwith "Unsupported binary operation"
     | _ -> failwith "Not yet supported"
 
