@@ -112,13 +112,12 @@ let binOp op x y res = [
 ]
 
 let andOrOp op x y res = [    
-    Binop("^", ebx, ebx);
-    Binop("^", eax, eax);
-    Binop("cmp", ebx, x); 
-    Set("ne", "%al");
     Binop("^", edx, edx);
-    Binop("cmp", ebx, y);
-    Set("ne", "%dl");
+    Binop("^", eax, eax);
+    Binop("cmp", L 0, x); 
+    Set("nz", "%al");
+    Binop("cmp", L 0, y);
+    Set("nz", "%dl");
     Binop(op, eax, edx);
     Mov(edx, res);    
 ]
@@ -141,10 +140,12 @@ let compileStep env instr = match instr with
                   Pop eax]
     | LD variable -> 
         let s, env = (env#global variable)#allocate in
-            env, [Mov (M ("global_" ^ variable), s)]
+            env, [Mov (M (env#loc variable), eax);
+                  Mov (eax, s)]
     | ST variable -> 
         let s, env = (env#global variable)#pop in
-            env, [Mov (s, M ("global_" ^ variable))] 
+            env, [Mov (s, eax);
+                  Mov (eax, M (env#loc variable))] 
     | BINOP operation -> 
         let x, y, env = env#pop2 in
             let res, env = env#allocate in
