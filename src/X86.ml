@@ -73,6 +73,91 @@ let show instr =
 (* Opening stack machine to use instructions without fully qualified names *)
 open SM
 
+let conditionRegister op = match op with
+    | "<"  -> "l"
+    | "<=" -> "le"
+    | ">"  -> "g"
+    | ">=" -> "ge"
+    | "==" -> "e"
+    | "!=" -> "ne"
+
+let compareOp op x y res = [
+    Mov (x, ebx);
+    Binop("^", eax, eax);
+    Binop("cmp", ebx, y);
+    Set(op, "%al");
+    Mov(eax, res);
+]
+
+let divOp x y res = [
+    Binop("^", edx, edx);
+    Mov(y, eax);
+    Cltd;
+    IDiv x;
+    Mov(eax, res);
+]
+
+let modOp x y res= [
+    Binop("^", edx, edx);
+    Mov(y, eax);
+    Cltd;
+    IDiv x;
+    Mov(edx, res);
+]
+
+let binOp op x y res = [
+    Mov(x, ecx);
+    Mov(y, edx);
+    Binop(op, ecx, edx);
+    Mov(edx, res);
+]
+
+let andOrOp op x y res = [    
+    Binop("^", ebx, ebx);
+    Binop("^", eax, eax);
+    Binop("cmp", ebx, x); 
+    Set("ne", "%al");
+    Binop("^", edx, edx);
+    Binop("cmp", ebx, y);
+    Set("ne", "%dl");
+    Binop(op, eax, edx);
+    Mov(edx, res);    
+]
+
+(*
+    complieStep : env -> insn -> env * instr list
+*)
+let compileStep env instr = match instr with
+    | CONST value -> 
+        let s, env = env#allocate in
+            env, [Mov (L value, s)]
+    | READ -> 
+        let s, env = env#allocate in 
+            env, [Call "Lread"; 
+                  Mov (eax, s)]
+    | WRITE -> 
+        let s, env = env#pop in
+            env, [Push s; 
+                  Call "Lwrite";
+                  Pop eax]
+    | LD variable -> 
+        let s, env = (env#global variable)#allocate in
+            env, [Mov (M ("global_" ^ variable), s)]
+    | ST variable -> 
+        let s, env = (env#global variable)#pop in
+            env, [Mov (s, M ("global_" ^ variable))] 
+    | BINOP operation -> 
+        let x, y, env = env#pop2 in
+            let res, env = env#allocate in
+                match operation with
+                    | ">" | ">=" | "<" | "<=" | "==" | "!=" -> env, compareOp (conditionRegister operation) x y res
+                    | "/" -> env, divOp x y res
+                    | "%" -> env, modOp x y res
+                    | "+" | "-" | "*" -> env, binOp operation x y res
+                    | "&&" | "||" -> env, andOrOp operation x y res
+                    | _ -> failwith "Unsupported binary operation"
+    | _ -> failwith "Not yet supported"
+
 (* Symbolic stack machine evaluator
 
      compile : env -> prg -> env * instr list
@@ -80,7 +165,12 @@ open SM
    Take an environment, a stack machine program, and returns a pair --- the updated environment and the list
    of x86 instructions
 *)
-let compile env code = failwith "Not yet implemented"
+let rec compile env code = match code with
+    | [] -> env, []
+    | instr :: code' -> 
+        let env, asm = compileStep env instr in
+            let env, asm' = compile env code' in 
+                env, asm @ asm'
 
 (* A set of strings *)           
 module S = Set.Make (String)
@@ -98,13 +188,13 @@ class env =
     (* allocates a fresh position on a symbolic stack *)
     method allocate =    
       let x, n =
-	let rec allocate' = function
-	| []                            -> ebx     , 0
-	| (S n)::_                      -> S (n+1) , n+1
-	| (R n)::_ when n < num_of_regs -> R (n+1) , stack_slots
-	| _                             -> S 0     , 1
-	in
-	allocate' stack
+        let rec allocate' = function
+        | []                            -> ebx     , 0
+        | (S n)::_                      -> S (n+1) , n+1
+        | (R n)::_ when n < num_of_regs -> R (n+1) , stack_slots
+        | _                             -> S 0     , 1
+        in
+        allocate' stack
       in
       x, {< stack_slots = max n stack_slots; stack = x::stack >}
 
