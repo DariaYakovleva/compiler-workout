@@ -152,6 +152,11 @@ let compileStep env instr = match instr with
         let s, env = (env#global variable)#pop in
             env, [Mov (s, eax);
                   Mov (eax, M (env#loc variable))] 
+    | LABEL label -> env, [Label label]
+    | JMP jmp -> env, [Jmp jmp]
+    | CJMP (cond, jmp) ->
+        let x, env = env#pop in
+            env, [Binop ("cmp", L 0, x); CJmp (cond, jmp)]
     | BINOP operation -> 
         let x, y, env = env#pop2 in
             let res, env = env#allocate in
