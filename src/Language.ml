@@ -106,9 +106,16 @@ module Expr =
     
     let rec eval env ((st, i, o, r) as conf) expr =      
       match expr with
-      | Const n -> n
-      | Var   x -> State.eval st x
-      | Binop (op, x, y) -> to_func op (eval st x) (eval st y)
+      | Const n -> (st, i, o, Some n)
+      | Var   x -> (st, i, o, Some (State.eval st x))   
+      | Binop (op, x, y) -> 
+            let (_, _, _, Some fst) = eval env conf x in
+            let (_, _, _, Some snd) = eval env conf y in
+                (st, i, o, Some(to_func op fst snd))
+      | Call (fname, args) -> 
+         let folder = (fun (v, conf) arg -> let (_, _, _, Some p) as conf = eval env conf arg in p :: v, conf) in
+         let res, conf = List.fold_left folder ([], conf) args in
+                    env#definition env fname (List.rev res) conf
          
     (* Expression parser. You can use the following terminals:
 
@@ -134,7 +141,7 @@ module Expr =
       
       primary:
         n:DECIMAL {Const n}
-      | x:IDENT   {Var x}
+      | x:IDENT s:( "(" args:!(Util.list0 parse) ")" {Call (x, args)} | empty {Var x}) {s}
       | -"(" parse -")"
     )
     
@@ -156,7 +163,10 @@ module Stmt =
     (* loop with a post-condition       *) | Repeat of t * Expr.t
     (* return statement                 *) | Return of Expr.t option
     (* call a procedure                 *) | Call   of string * Expr.t list with show
-                                                                    
+
+     let makeSeq x expr = match expr with
+        | Skip -> x
+        | y    -> Seq (x, y)                                                                
     (* Statement evaluator
 
          val eval : env -> config -> t -> config
@@ -166,22 +176,27 @@ module Stmt =
     *)
     let rec eval env ((st, i, o, r) as conf) k stmt =
       match stmt with
-      | Read    x       -> (match i with z::i' -> (State.update x z st, i', o) | _ -> failwith "Unexpected end of input")
-      | Write   e       -> (st, i, o @ [Expr.eval st e])
-      | Assign (x, e)   -> (State.update x (Expr.eval st e) st, i, o)
-      | Skip            -> conf
-      | Seq    (s1, s2) -> eval env (eval env conf s1) s2
-      | If     (cond, condt, condf) -> eval env conf (if (Expr.eval st cond) <> 0 then condt else condf)
-      | While  (cond, condt) -> if (Expr.eval st cond) = 0 then conf else eval env (eval env conf condt) stmt
-      | Until (condt, cond) -> let (new_st, new_i, new_o) = eval env conf condt in
-            if (Expr.eval st cond) = 0 then eval env (new_st, new_i, new_o) stmt else (new_st, new_i, new_o)
+      | Read x -> eval env (match i with z::i' -> (State.update x z st, i', o, r) | _ -> failwith "Unexpected end of input") Skip k
+      | Write e -> eval env (let (st, i, o, Some x) = Expr.eval env conf e in (st, i, o @ [x], r)) Skip k
+      | Assign (x, e) -> eval env (let (st, i, o, Some t) = Expr.eval env conf e in (State.update x t st, i, o, r)) Skip k
+      | Skip -> (match k with 
+                | Skip -> conf
+                | _ -> eval env conf Skip k)
+      | Seq (s1, s2) -> eval env conf (makeSeq s2 k) s1
+      | If (cond, condt, condf) -> 
+        let (_, _, _, Some cond_res) as conf = Expr.eval env conf cond in
+            eval env conf k (if cond_res <> 0 then condt else condf)
+      | While  (cond, condt) -> 
+        let (_, _, _, Some cond_res) as conf = Expr.eval env conf cond in
+             (if cond_res == 0 then (eval env conf Skip k) else (eval env conf (makeSeq stmt k) condt))
+      | Repeat (condt, cond) -> eval env conf (makeSeq (While (Expr.Binop ("==", cond, Expr.Const 0), condt)) k) condt
       | Call (fname, params) -> 
-            let (args, locals, body) = env#definition fname in
-            let args' = List.combine args (List.map (Expr.eval st) params) in
-            let st' = State.enter st (args@locals) in
-            let st' = List.fold_left (fun s (p, v) -> State.update p v s) st' args' in
-            let (st'', i', o') = eval env (st', i, o) body in
-                (State.leave st'' st, i', o')
+         let conf' = Expr.eval env conf (Expr.Call (fname, params)) in
+            eval env conf' Skip k
+      | Return res -> (match res with
+         | None -> (st, i, o, None)
+         | Some x -> Expr.eval env conf x)
+      | _ -> failwith "No stmt match"
 
     let rec parseElif elfs condf = match elfs with
         | [] -> condf
@@ -195,7 +210,7 @@ module Stmt =
       stmt:
         "read" "(" x:IDENT ")"          {Read x}
       | "write" "(" e:!(Expr.parse) ")" {Write e}
-      | x:IDENT ":=" e:!(Expr.parse)    {Assign (x, e)}            
+      | x:IDENT todo:(":=" e:!(Expr.parse) {Assign (x, e)} | "(" args:!(Util.list0)[Expr.parse] ")" {Call (x, args)}) {todo}
       | %"skip" {Skip}
       | %"if" cond:!(Expr.parse) 
         %"then" condt:parse 
@@ -207,8 +222,9 @@ module Stmt =
               | Some cond -> parseElif cond2 cond 
             )}
       | %"while" cond:!(Expr.parse) %"do" condt:parse %"od" {While (cond, condt)}
-      | %"repeat" condt:parse %"until" cond:!(Expr.parse) {Until (condt, cond)}
+      | %"repeat" condt:parse %"until" cond:!(Expr.parse) {Repeat (condt, cond)}
       | %"for" init:parse "," cond:!(Expr.parse) "," step:parse %"do" condt:parse %"od" {Seq (init, While (cond, Seq (condt, step)))}
+      | %"return" res:!(Expr.parse)? {Return res}
     )
       
   end

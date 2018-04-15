@@ -78,6 +78,15 @@ let run p i =
   let (_, _, (_, _, o)) = eval (object method labeled l = M.find l m end) ([], [], (State.empty, i, [])) p in o
 
 let get_label label = "L_" ^ (string_of_int label)
+
+let rec compile_expr e =
+   match e with
+   | Expr.Const n -> [CONST n]
+   | Expr.Var x -> [LD x]
+   | Expr.Binop (op, a, b) -> compile_expr a @ compile_expr b @ [BINOP op]
+   | Expr.Call (func, args) -> prep_args args @ [CALL func]
+and prep_args args = List.concat (List.rev_map compile_expr args)
+
 (* Stack machine compiler
 
      val compile : Language.t -> prg
@@ -111,13 +120,14 @@ let rec compile (defs, p) =
     let (c1, prg1) = compileStmt (labels + 1) st in
     let label_check = get_label c1 in
     (c1 + 1, [JMP label_check; LABEL label_loop] @ prg1 @ [LABEL label_check] @ expr cond @ [CJMP ("nz", label_loop)])
-  | Stmt.Until (st, cond) ->  
+  | Stmt.Repeat (st, cond) ->  
     let label_loop = get_label labels in
     let (c1, prg1) = compileStmt (labels + 1) st in
     (c1, [LABEL label_loop] @ prg1 @ expr cond @ [CJMP ("z", label_loop)])
   | Stmt.Call (fname, args) -> 
     let comp_args = List.concat (List.map expr (List.rev args)) in
         labels, comp_args @ [CALL ("L_" ^ fname)]
+  | Stmt.Return res -> (labels, (match res with None -> [] | Some v -> compile_expr v) @ [END])
   in
   let rec compileDef labels (fname, (params, locals, body)) =
     let labels', body' = compileStmt labels body in
