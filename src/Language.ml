@@ -73,16 +73,12 @@ module Expr =
     type config = State.t * int list * int list * int option
                                                             
     (* Expression evaluator
-
-          val eval : env -> config -> t -> config
-
+          val eval : env -> config -> t -> int * config
        Takes an environment, a configuration and an expresion, and returns another configuration. The 
        environment supplies the following method
-
            method definition : env -> string -> int list -> config -> config
-
        which takes an environment (of the same type), a name of the function, a list of actual parameters and a configuration, 
-       an returns resulting configuration
+       an returns a pair: the return value for the call and the resulting configuration
     *)                                                       
     let to_func op =
       let bti   = function true -> 1 | _ -> 0 in
@@ -102,8 +98,8 @@ module Expr =
       | "!=" -> bti |> (<>)
       | "&&" -> fun x y -> bti (itb x && itb y)
       | "!!" -> fun x y -> bti (itb x || itb y)
-      | _    -> failwith (Printf.sprintf "Unknown binary operator %s" op)          
-
+      | _    -> failwith (Printf.sprintf "Unknown binary operator %s" op)    
+    
     let rec eval env ((st, i, o, r) as conf) expr =      
       match expr with
       | Const n -> (st, i, o, Some n)
@@ -118,10 +114,10 @@ module Expr =
                     env#definition env fname (List.rev res) conf
          
     (* Expression parser. You can use the following terminals:
-
          IDENT   --- a non-empty identifier a-zA-Z[a-zA-Z0-9_]* as a string
          DECIMAL --- a decimal constant [0-9]+ as a string                                                                                                                  
     *)
+    ostap (                                      
       parse:
       !(Ostap.Util.expr 
              (fun x -> x)
@@ -167,17 +163,10 @@ module Stmt =
         | Skip -> x
         | y    -> Seq (x, y)                                                                
     (* Statement evaluator
-
          val eval : env -> config -> t -> config
-
        Takes an environment, a configuration and a statement, and returns another configuration. The 
        environment is the same as for expressions
     *)
-         
-    (* Statement parser *)
-    ostap (
-      parse: empty {failwith "Not implemented"}
-
     let rec eval env ((st, i, o, r) as conf) k stmt =
       match stmt with
       | Read x -> eval env (match i with z::i' -> (State.update x z st, i', o, r) | _ -> failwith "Unexpected end of input") Skip k
@@ -240,8 +229,13 @@ module Definition =
     (* The type for a definition: name, argument list, local variables, body *)
     type t = string * (string list * string list * Stmt.t)
 
-    ostap (     
-      parse: empty {failwith "Not implemented"}
+    ostap (
+      arg  : IDENT;
+      parse: %"fun" name:IDENT "(" args:!(Util.list0 arg) ")"
+         locs:(%"local" !(Util.list arg))?
+        "{" body:!(Stmt.parse) "}" {
+        (name, (args, (match locs with None -> [] | Some l -> l), body))
+      }
     )
 
   end
@@ -252,9 +246,7 @@ module Definition =
 type t = Definition.t list * Stmt.t    
 
 (* Top-level evaluator
-
      eval : t -> int list -> int list
-
    Takes a program and its input stream, and returns the output stream
 *)
 let eval (defs, body) i =
