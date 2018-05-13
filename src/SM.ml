@@ -1,5 +1,6 @@
 open GT       
 open Language
+open List
        
 (* The type for the stack machine instructions *)
 @type insn =
@@ -45,10 +46,12 @@ let rec eval env ((cstack, stack, ((st, i, o) as c)) as conf) = function
 (match insn with
 | JMP jmp -> eval env conf (env#labeled jmp)
 | CJMP (cond, jmp) -> let x::stack' = stack in eval env (cstack, stack', c) 
-    (if (cond = "z" && x = 0 || cond = "nz" && x <> 0)
+    (if (cond = "z" && (Value.to_int x) = 0 || cond = "nz" && (Value.to_int x) <> 0)
     then (env#labeled jmp) 
     else prg')
-| CALL (fname, _, _) -> eval env ((prg', st) :: cstack, stack, c) (env#labeled fname)
+| CALL (fname, n, p) -> if env#is_label fname
+                        then eval env ((prg', st) :: cstack, stack, c) (env#labeled fname)
+                        else eval env (env#builtin conf fname n p) prg'
 | BEGIN (_, args, locals) -> 
     let rec zip accumulator args stack = (match args, stack with
         | [], _ -> List.rev accumulator, stack
@@ -59,12 +62,12 @@ let rec eval env ((cstack, stack, ((st, i, o) as c)) as conf) = function
 | END | RET _ -> (match cstack with
     | (prg, st') :: cstack' -> eval env (cstack', stack, (State.leave st st', i, o)) prg
     | [] -> conf)
-| BINOP op -> let y::x::stack' = stack in eval env (cstack, Expr.to_func op x y :: stack', c) prg'
-| READ     -> let z::i' = i in eval env (cstack, z::stack, (st, i', o)) prg'
-| WRITE    -> let z::stack' = stack in eval env (cstack, stack', (st, i, o @ [z])) prg'
-| CONST i  -> eval env (cstack, i::stack, c) prg'
+| BINOP op -> let y::x::stack' = stack in eval env (cstack, Value.of_int (Expr.to_func op (Value.to_int x) (Value.to_int y)) :: stack', c) prg'
+| CONST i  -> eval env (cstack, (Value.of_int i)::stack, c) prg'
+| STRING s -> eval env (cstack, (Value.of_string s)::stack, c) prg'
 | LD x     -> eval env (cstack, State.eval st x :: stack, c) prg'
 | ST x     -> let z::stack' = stack in eval env (cstack, stack', (State.update x z st, i, o)) prg'
+| STA (x, n) -> let v::is, stack' = split (n + 1) stack in (cstack, stack', (Language.Stmt.update st x v (List.rev is), i, o))
 | LABEL label -> eval env conf prg'
 )
 
@@ -101,6 +104,21 @@ let run p i =
   in
   o
 
+class labels = 
+  object (self)
+    val cnt = 0
+    method get_label = "label_" ^ string_of_int cnt, {<cnt = cnt + 1>}
+    method get_flabel name = "L" ^ name
+  end 
+
+let rec compile_expr e =
+   match e with
+   | Expr.Const n -> [CONST n]
+   | Expr.Var x -> [LD x]
+   | Expr.Binop (op, a, b) -> compile_expr a @ compile_expr b @ [BINOP op]
+   | Expr.Call (func, args) -> prep_args args @ [CALL (func, List.length args, false)]
+and prep_args args = List.concat (List.rev_map compile_expr args)
+
 (* Stack machine compiler
 
      val compile : Language.t -> prg
@@ -110,14 +128,21 @@ let run p i =
 *)
 let rec compile (defs, p) =
   let rec expr = function
-  | Expr.Var   x          -> [LD x]
-  | Expr.Const n          -> [CONST n]
+  | Expr.Var x -> [LD x]
+  | Expr.Const n -> [CONST n]
+  | Expr.String s -> [STRING s]
+  | Expr.Array arr -> List.flatten (List.map expr arr) @ [CALL ("$array", List.length arr, false)]
+  | Expr.Elem (arr, pos) -> expr arr @ expr pos @ [CALL ("$elem", 2, false)]
+  | Expr.Length arr  -> expr arr @ [CALL ("$length", 1, false)]
+  | Expr.Call (fname, args) -> (
+      let comp_args = List.concat (List.map expr (List.rev args)) in
+        comp_args @ [CALL ("L" ^ fname, List.length args, false)]
+    )
   | Expr.Binop (op, x, y) -> expr x @ expr y @ [BINOP op]
   in
   let rec compileStmt labels = function  
-  | Stmt.Read x -> (labels, [READ; ST x])
-  | Stmt.Write e -> (labels, expr e @ [WRITE])
-  | Stmt.Assign (x, e) -> (labels, expr e @ [ST x])
+  | Stmt.Assign (x, [], e) -> (labels, expr e @ [ST x])
+  | Stmt.Assign (x, is, e) -> (labels, List.flatten (List.map expr (is @ [e])) @ [STA (x, List.length is)])
   | Stmt.Skip -> (labels, [])
   | Stmt.Seq (st1, st2) -> 
     let (c1, prg1) = compileStmt labels st1 in

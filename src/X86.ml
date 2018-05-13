@@ -139,7 +139,7 @@ let andOrOp op x y res = [
     Mov(edx, res);    
 ]
 
-let rec my_init i n f = if i >= n then [] else (f i) :: (my_init (i + 1) n f) 
+let rec init_list pos n f = if pos >= n then [] else (f pos) :: (init_list (pos + 1) n f) 
 (*
     complieStep : env -> insn -> env * instr list
 *)
@@ -147,15 +147,6 @@ let compileStep env instr = match instr with
     | CONST value -> 
         let s, env = env#allocate in
             env, [Mov (L value, s)]
-    | READ -> 
-        let s, env = env#allocate in 
-            env, [Call "Lread"; 
-                  Mov (eax, s)]
-    | WRITE -> 
-        let s, env = env#pop in
-            env, [Push s; 
-                  Call "Lwrite";
-                  Pop eax]
     | LD variable -> 
         let s, env = (env#global variable)#allocate in
             env, [Mov (env#loc variable, eax);
@@ -196,7 +187,7 @@ let compileStep env instr = match instr with
     | CALL (fname, n, p) ->
         let pushr = List.map (fun x -> Push x) env#live_registers in
         let popr = List.map (fun x -> Pop x) @@ List.rev env#live_registers in
-        let env, rev_params = List.fold_left (fun (env, list) _ -> let s, env = env#pop in env, s::list) (env, []) (my_init 0 n (fun _ -> ())) in
+        let env, rev_params = List.fold_left (fun (env, list) _ -> let s, env = env#pop in env, s::list) (env, []) (init_list 0 n (fun _ -> ())) in
         let params = List.rev rev_params in
         let push_args = List.map (fun x -> Push x) params in
         let env, get_result = if p then env, [] else (let s, env = env#allocate in env, [Mov (eax, s)]) in
@@ -219,7 +210,7 @@ let rec compile env code = match code with
 module S = Set.Make (String)
 
 (* Environment implementation *)
-let make_assoc l = List.combine l (List.init (List.length l) (fun x -> x))
+let make_assoc l = List.combine l (init_list 0 (List.length l) (fun x -> x))
                      
 class env =
   object (self)

@@ -29,8 +29,10 @@ module Value =
     let of_string s = String s
     let of_array  a = Array  a
 
+    let rec init_list pos n f = if pos >= n then [] else (f pos) :: (init_list (pos + 1) n f) 
+
     let update_string s i x = String.init (String.length s) (fun j -> if j = i then x else s.[j])
-    let update_array  a i x = List.init   (List.length a)   (fun j -> if j = i then x else List.nth a j)
+    let update_array a i x = init_list 0 (List.length a) (fun j -> if j = i then x else List.nth a j)
 
   end
        
@@ -127,17 +129,6 @@ module Expr =
        which takes an environment (of the same type), a name of the function, a list of actual parameters and a configuration, 
        an returns a pair: the return value for the call and the resulting configuration
     *)                                                       
-    (*and eval_list env conf xs =
-      let vs, (st, i, o, _) =
-        List.fold_left
-          (fun (acc, conf) x ->
-             let (_, _, _, Some v) as conf = eval env conf x in
-             v::acc, conf
-          )
-          ([], conf)
-          xs
-      in
-      (st, i, o, List.rev vs)*)
 
     let to_func op =
       let bti   = function true -> 1 | _ -> 0 in
@@ -161,16 +152,31 @@ module Expr =
     
     let rec eval env ((st, i, o, r) as conf) expr =      
       match expr with
-      | Const n -> (st, i, o, Some n)
+      | Const n -> (st, i, o, Some (Value.of_int n))
+      | Array arr -> let (st, i, o, evaluated) = eval_list env conf arr in env#definition env "$array" evaluated (st, i, o, None)
+      | String s -> (st, i, o, Some (Value.of_string s))
+      | Elem (arr, pos) -> let (st, i, o, args) = eval_list env conf [arr; pos] in env#definition env "$elem" args (st, i, o, None)
+      | Length arr -> let (st, i, o, Some arg) = eval env conf arr in env#definition env "$length" [arg] (st, i, o, None)
       | Var   x -> (st, i, o, Some (State.eval st x))   
       | Binop (op, x, y) -> 
             let (_, _, _, Some fst) = eval env conf x in
             let (_, _, _, Some snd) = eval env conf y in
-                (st, i, o, Some(to_func op fst snd))
+                (st, i, o, Some(Value.of_int (to_func op (Value.to_int fst) (Value.to_int snd))))
       | Call (fname, args) -> 
          let folder = (fun (v, conf) arg -> let (_, _, _, Some p) as conf = eval env conf arg in p :: v, conf) in
          let res, conf = List.fold_left folder ([], conf) args in
                     env#definition env fname (List.rev res) conf
+     and eval_list env conf xs =
+      let vs, (st, i, o, _) =
+        List.fold_left
+          (fun (acc, conf) x ->
+             let (_, _, _, Some v) as conf = eval env conf x in
+             v::acc, conf
+          )
+          ([], conf)
+          xs
+      in
+      (st, i, o, List.rev vs)
 
          
     (* Expression parser. You can use the following terminals:
@@ -195,10 +201,16 @@ module Expr =
          )
          primary);
       
-      primary:
+      primary: b:base is:(-"[" i:parse -"]" {`Elem i} | "." %"length" {`Len})* {List.fold_left (fun b -> function `Elem i -> Elem (b, i) | `Len -> Length b) b is};      
+
+      base:
         n:DECIMAL {Const n}
+      | c:CHAR {Const (Char.code c)}
+      | s:STRING {String (String.sub s 1 (String.length s - 2))}
+      | "[" elems:!(Util.list0 parse) "]" {Array elems}
       | x:IDENT s:( "(" args:!(Util.list0 parse) ")" {Call (x, args)} | empty {Var x}) {s}
       | -"(" parse -")"
+
     )
     
   end
@@ -248,19 +260,19 @@ module Stmt =
     *)
     let rec eval env ((st, i, o, r) as conf) k stmt =
       match stmt with
-      | Read x -> eval env (match i with z::i' -> (State.update x z st, i', o, r) | _ -> failwith "Unexpected end of input") Skip k
-      | Write e -> eval env (let (st, i, o, Some x) = Expr.eval env conf e in (st, i, o @ [x], r)) Skip k
-      | Assign (x, e) -> eval env (let (st, i, o, Some t) = Expr.eval env conf e in (State.update x t st, i, o, r)) Skip k
+      | Assign (x, is, e) -> let (st, i, o, is) = Expr.eval_list env conf is in
+            let (st, i, o, Some v) = Expr.eval env (st, i, o, None) e in
+            eval env (update st x v is, i, o, None) Skip k
       | Skip -> (match k with 
                 | Skip -> conf
                 | _ -> eval env conf Skip k)
       | Seq (s1, s2) -> eval env conf (makeSeq s2 k) s1
       | If (cond, condt, condf) -> 
         let (_, _, _, Some cond_res) as conf = Expr.eval env conf cond in
-            eval env conf k (if cond_res <> 0 then condt else condf)
+            eval env conf k (if (Value.to_int cond_res) <> 0 then condt else condf)
       | While  (cond, condt) -> 
         let (_, _, _, Some cond_res) as conf = Expr.eval env conf cond in
-             (if cond_res == 0 then (eval env conf Skip k) else (eval env conf (makeSeq stmt k) condt))
+             (if (Value.to_int cond_res) == 0 then (eval env conf Skip k) else (eval env conf (makeSeq stmt k) condt))
       | Repeat (condt, cond) -> eval env conf (makeSeq (While (Expr.Binop ("==", cond, Expr.Const 0), condt)) k) condt
       | Call (fname, params) -> 
          let conf' = Expr.eval env conf (Expr.Call (fname, params)) in
@@ -280,9 +292,7 @@ module Stmt =
         s:stmt ";" ss:parse {Seq (s, ss)}
       | stmt;
       stmt:
-        "read" "(" x:IDENT ")"          {Read x}
-      | "write" "(" e:!(Expr.parse) ")" {Write e}
-      | x:IDENT todo:(":=" e:!(Expr.parse) {Assign (x, e)} | "(" args:!(Util.list0)[Expr.parse] ")" {Call (x, args)}) {todo}
+        x:IDENT todo:(ind:(-"[" !(Expr.parse) -"]")* ":=" e:!(Expr.parse) {Assign (x, ind, e)} | "(" args:!(Util.list0)[Expr.parse] ")" {Call (x, args)}) {todo}
       | %"skip" {Skip}
       | %"if" cond:!(Expr.parse) 
         %"then" condt:parse 
