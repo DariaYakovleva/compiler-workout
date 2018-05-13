@@ -90,18 +90,130 @@ open SM
    Take an environment, a stack machine program, and returns a pair --- the updated environment and the list
    of x86 instructions
 *)
-let compile env code =
-  let suffix = function
-  | "<"  -> "l"
-  | "<=" -> "le"
-  | "==" -> "e"
-  | "!=" -> "ne"
-  | ">=" -> "ge"
-  | ">"  -> "g"
-  | _    -> failwith "unknown operator"	
-  in
-  let rec compile' env scode = failwith "Not implemented" in
-  compile' env code
+let conditionRegister op = match op with
+    | "<"  -> "l"
+    | "<=" -> "le"
+    | ">"  -> "g"
+    | ">=" -> "ge"
+    | "==" -> "e"
+    | "!=" -> "ne"
+
+let compareOp op x y res = [
+    Mov (y, edx);
+    Binop("^", eax, eax);
+    Binop("cmp", x, edx);
+    Set(op, "%al");
+    Mov(eax, res);
+]
+
+let divOp x y res = [
+    Binop("^", edx, edx);
+    Mov(y, eax);
+    Cltd;
+    IDiv x;
+    Mov(eax, res);
+]
+
+let modOp x y res= [
+    Binop("^", edx, edx);
+    Mov(y, eax);
+    Cltd;
+    IDiv x;
+    Mov(edx, res);
+]
+
+let binOp op x y res = [
+    Mov(y, eax);
+    Binop(op, x, eax);
+    Mov(eax, res);
+]
+
+let andOrOp op x y res = [    
+    Binop("^", edx, edx);
+    Binop("^", eax, eax);
+    Binop("cmp", L 0, x); 
+    Set("nz", "%al");
+    Binop("cmp", L 0, y);
+    Set("nz", "%dl");
+    Binop(op, eax, edx);
+    Mov(edx, res);    
+]
+
+let rec my_init i n f = if i >= n then [] else (f i) :: (my_init (i + 1) n f) 
+(*
+    complieStep : env -> insn -> env * instr list
+*)
+let compileStep env instr = match instr with
+    | CONST value -> 
+        let s, env = env#allocate in
+            env, [Mov (L value, s)]
+    | READ -> 
+        let s, env = env#allocate in 
+            env, [Call "Lread"; 
+                  Mov (eax, s)]
+    | WRITE -> 
+        let s, env = env#pop in
+            env, [Push s; 
+                  Call "Lwrite";
+                  Pop eax]
+    | LD variable -> 
+        let s, env = (env#global variable)#allocate in
+            env, [Mov (env#loc variable, eax);
+                  Mov (eax, s)]
+    | ST variable -> 
+        let s, env = (env#global variable)#pop in
+            env, [Mov (s, eax);
+                  Mov (eax, env#loc variable)] 
+    | LABEL label -> env, [Label label]
+    | JMP jmp -> env, [Jmp jmp]
+    | CJMP (cond, jmp) ->
+        let x, env = env#pop in
+            env, [Binop ("cmp", L 0, x); CJmp (cond, jmp)]
+    | BINOP operation -> 
+        (let x, y, env = env#pop2 in
+            let res, env = env#allocate in
+                match operation with
+                    | ">" | ">=" | "<" | "<=" | "==" | "!=" -> env, compareOp (conditionRegister operation) x y res
+                    | "/" -> env, divOp x y res
+                    | "%" -> env, modOp x y res
+                    | "+" | "-" | "*" -> env, binOp operation x y res
+                    | "&&" | "!!" -> env, andOrOp operation x y res
+                    | _ -> failwith "Unsupported binary operation")
+    | BEGIN (fname, args, locals) ->
+        let env = env#enter fname args locals in
+            env, [Push ebp; 
+                  Mov (esp, ebp); 
+                  Binop ("-", M ("$" ^ env#lsize), esp)]
+    | END -> env, [Label env#epilogue; 
+                   Mov (ebp, esp); 
+                   Pop ebp; 
+                   Ret; 
+                   Meta (Printf.sprintf "\t.set\t%s,\t%d" env#lsize (env#allocated * word_size))]
+    | RET res -> if res
+        then let x, env = env#pop in env, [Mov (x, eax); 
+                                           Jmp env#epilogue]
+        else env, [Jmp env#epilogue]
+    | CALL (fname, n, p) ->
+        let pushr = List.map (fun x -> Push x) env#live_registers in
+        let popr = List.map (fun x -> Pop x) @@ List.rev env#live_registers in
+        let env, rev_params = List.fold_left (fun (env, list) _ -> let s, env = env#pop in env, s::list) (env, []) (my_init 0 n (fun _ -> ())) in
+        let params = List.rev rev_params in
+        let push_args = List.map (fun x -> Push x) params in
+        let env, get_result = if p then env, [] else (let s, env = env#allocate in env, [Mov (eax, s)]) in
+            env, pushr @ push_args @ [Call fname; Binop ("+", L (n * word_size), esp)] @ popr @ get_result
+    | _ -> failwith "Not yet supported"
+
+(* Symbolic stack machine evaluator
+     compile : env -> prg -> env * instr list
+   Take an environment, a stack machine program, and returns a pair --- the updated environment and the list
+   of x86 instructions
+*)
+let rec compile env code = match code with
+    | [] -> env, []
+    | instr :: code' -> 
+        let env, asm = compileStep env instr in
+            let env, asm' = compile env code' in 
+                env, asm @ asm'                                
 
 (* A set of strings *)           
 module S = Set.Make (String)
@@ -127,14 +239,14 @@ class env =
     (* allocates a fresh position on a symbolic stack *)
     method allocate =    
       let x, n =
-	let rec allocate' = function
-	| []                            -> ebx     , 0
-	| (S n)::_                      -> S (n+1) , n+2
-	| (R n)::_ when n < num_of_regs -> R (n+1) , stack_slots
+    let rec allocate' = function
+    | []                            -> ebx     , 0
+    | (S n)::_                      -> S (n+1) , n+2
+    | (R n)::_ when n < num_of_regs -> R (n+1) , stack_slots
         | (M _)::s                      -> allocate' s
-	| _                             -> S 0     , 1
-	in
-	allocate' stack
+    | _                             -> S 0     , 1
+    in
+    allocate' stack
       in
       x, {< stack_slots = max n stack_slots; stack = x::stack >}
 
