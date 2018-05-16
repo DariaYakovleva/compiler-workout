@@ -263,6 +263,7 @@ module S = Set.Make (String)
 (* A map indexed by strings *)
 module M = Map.Make (String)
 
+let rec init_list pos n f = if pos >= n then [] else (f pos) :: (init_list (pos + 1) n f)
 (* Environment implementation *)
 let make_assoc l = List.combine l (init_list 0 (List.length l) (fun x -> x))
                      
