@@ -11,7 +11,7 @@ open Combinators
 module Value =
   struct
 
-    @type t = Int of int | String of string | Array of t list with show
+    @type t = Int of int | String of string | Array of t list | Sexp of string * t list with show
 
     let to_int = function 
     | Int n -> n 
@@ -265,7 +265,10 @@ module Stmt =
 
         (* Pattern parser *)                                 
         ostap (
-          parse: empty {failwith "Not implemented"}
+          parse:
+            %"_" {Wildcard}
+            | "`" t:IDENT ps:(-"(" !(Util.list parse) -")")? {Sexp (t, match ps with None -> [] | Some ps -> ps)}
+            | x:IDENT {Ident x}
         )
         
         let vars p =
@@ -313,6 +316,7 @@ module Stmt =
        Takes an environment, a configuration and a statement, and returns another configuration. The 
        environment is the same as for expressions
     *)
+
     let rec eval env ((st, i, o, r) as conf) k stmt =
       match stmt with
       | Assign (x, is, e) -> let (st, i, o, is) = Expr.eval_list env conf is in
@@ -335,6 +339,27 @@ module Stmt =
       | Return res -> (match res with
          | None -> (st, i, o, None)
          | Some x -> Expr.eval env conf x)
+      | Leave -> eval env (State.drop st, i, o, r) Skip k
+      | Case (expr, cases) -> let (_, _, _, Some expr') as conf' = Expr.eval env conf expr in
+        let rec find_case ((st, i, o, _) as conf) = function
+          | [] -> failwith (Printf.sprintf "no cases match")
+          | (case, b)::tail -> 
+            let update x v = function
+              | None -> None
+              | Some e -> Some (State.bind x v e)
+            in let rec match_case c v st = match c, v with
+              | Pattern.Wildcard, _ -> st
+              | Pattern.Sexp (s, xs), Value.Sexp (s', xs') when s = s' -> match_list st xs xs'
+              | Pattern.Ident x, v -> update x v st
+              | _ -> None
+            and match_list st' a b = match a, b with
+              | [], [] -> st'
+              | x::xs, y::ys -> match_list (match_case x y st') xs ys
+              | _ -> None
+            in match match_case case expr' (Some State.undefined) with
+               | None -> find_case conf tail
+               | Some st' -> eval env (State.push st st' (Pattern.vars case), i, o, None) k (Seq (b, Leave))
+        in find_case conf' cases
       | _ -> failwith "No stmt match"
 
     let rec parseElif elfs condf = match elfs with
@@ -362,6 +387,7 @@ module Stmt =
       | %"repeat" condt:parse %"until" cond:!(Expr.parse) {Repeat (condt, cond)}
       | %"for" init:parse "," cond:!(Expr.parse) "," step:parse %"do" condt:parse %"od" {Seq (init, While (cond, Seq (condt, step)))}
       | %"return" res:!(Expr.parse)? {Return res}
+      | %"case" e:!(Expr.parse) %"of" bs:!(Util.listBy)[ostap ("|")][ostap (!(Pattern.parse) -"->" parse)] %"esac" {Case (e, bs)}
 
     )
       
