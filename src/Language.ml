@@ -241,6 +241,7 @@ module Expr =
       | c:CHAR {Const (Char.code c)}
       | s:STRING {String (String.sub s 1 (String.length s - 2))}
       | "[" elems:!(Util.list0 parse) "]" {Array elems}
+      | "`" t:IDENT args:(-"(" !(Util.list)[parse] -")")? {Sexp (t, match args with None -> [] | Some args -> args)}
       | x:IDENT s:( "(" args:!(Util.list0 parse) ")" {Call (x, args)} | empty {Var x}) {s}
       | -"(" parse -")"
 
